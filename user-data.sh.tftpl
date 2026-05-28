@@ -1,0 +1,165 @@
+# =============================================================================
+# User Data — EC2 bootstrap script for Docker Compose deployment
+# =============================================================================
+# Runs on first boot. Installs Docker, mounts EFS, creates docker-compose.yml,
+# authenticates with ECR, and starts all 4 containers.
+# =============================================================================
+#!/bin/bash
+set -euo pipefail
+exec > >(tee /var/log/user-data.log | logger -t user-data) 2>&1
+
+echo "=== AquaOS Bootstrap — $(date) ==="
+
+# ── System updates ──────────────────────────────────────────────────
+dnf update -y
+dnf install -y amazon-efs-utils nfs-utils jq
+
+# ── Docker ──────────────────────────────────────────────────────────
+dnf install -y docker
+systemctl enable docker
+systemctl start docker
+usermod -aG docker ec2-user
+
+# ── Docker Compose plugin ───────────────────────────────────────────
+DOCKER_COMPOSE_VERSION="v2.29.1"
+ARCH="aarch64"
+mkdir -p /usr/local/libexec/docker/cli-plugins
+curl -SL "https://github.com/docker/compose/releases/download/$${DOCKER_COMPOSE_VERSION}/docker-compose-linux-$${ARCH}" \
+  -o /usr/local/libexec/docker/cli-plugins/docker-compose
+chmod +x /usr/local/libexec/docker/cli-plugins/docker-compose
+
+# ── EFS Mount (for SQLite database from Go backend) ─────────────────
+EFS_ID="${efs_id}"
+EFS_MOUNT="/mnt/efs/backend"
+mkdir -p "$EFS_MOUNT"
+mount -t efs -o tls "$EFS_ID:/" "$EFS_MOUNT" || true
+
+# Add to fstab for persistence across reboots
+if ! grep -q "$EFS_ID" /etc/fstab; then
+  echo "$EFS_ID:/ $EFS_MOUNT efs _netdev,tls,noresvport 0 0" >> /etc/fstab
+fi
+
+chown -R 1000:1000 "$EFS_MOUNT" 2>/dev/null || true
+
+# ── Ics data directory ──────────────────────────────────────────────
+ICS_DIR="/mnt/data/ics"
+mkdir -p "$ICS_DIR"
+chown -R 1000:1000 "$ICS_DIR" 2>/dev/null || true
+
+# ── Docker Compose File ─────────────────────────────────────────────
+cat > /opt/aquaos/docker-compose.yml << 'COMPOSE_EOF'
+services:
+
+  # ── API Gateway / Frontend (nginx + React SPA) ────────────────────
+  aqua-os-web:
+    image: ${ecr_web_url}:latest
+    ports:
+      - "80:80"
+    depends_on:
+      - aqua-os-backend
+      - aqua-os-calendar
+    restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: /aqua-os/web
+        awslogs-region: ${aws_region}
+        awslogs-stream-prefix: web
+
+  # ── Go Backend ────────────────────────────────────────────────────
+  aqua-os-backend:
+    image: ${ecr_backend_url}:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - JWT_KEY=${jwt_key}
+      - JWT_ISSUER=AquaOsCalendar
+      - JWT_AUDIENCE=AquaOsCalendar
+      - ADMIN_USERNAME=${admin_username}
+      - ADMIN_PASSWORD=${admin_password}
+    volumes:
+      - /mnt/efs/backend:/app
+    restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: /aqua-os/backend
+        awslogs-region: ${aws_region}
+        awslogs-stream-prefix: backend
+
+  # ── Calendar Service (C# .NET) ────────────────────────────────────
+  aqua-os-calendar:
+    image: ${ecr_calendar_url}:latest
+    ports:
+      - "8082:8082"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:8082
+      - AWS__Region=${aws_region}
+      - IcsFilesPath=/data/ics
+      - CREW_SERVICE_URL=http://aqua-os-crew:8001
+      - Jwt__Key=${jwt_key}
+      - Jwt__Issuer=AquaOsCalendar
+      - Jwt__Audience=AquaOsCalendar
+      - Admin__Username=${admin_username}
+      - Admin__Password=${admin_password}
+    volumes:
+      - /mnt/data/ics:/data/ics
+    restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: /aqua-os/calendar
+        awslogs-region: ${aws_region}
+        awslogs-stream-prefix: calendar
+
+  # ── CrewAI Microservice (Python) ──────────────────────────────────
+  aqua-os-crew:
+    image: ${ecr_crew_url}:latest
+    ports:
+      - "8001:8001"
+    environment:
+      - OPENROUTER_API_KEY=${openrouter_api_key}
+      - GEMINI_API_KEY=${gemini_api_key}
+      - CALENDAR_SERVICE_URL=http://aqua-os-calendar:8082
+      - TELEGRAM_BOT_TOKEN=${telegram_bot_token}
+      - TELEGRAM_CHANNEL_ID=${telegram_channel_id}
+    restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: /aqua-os/crew
+        awslogs-region: ${aws_region}
+        awslogs-stream-prefix: crew
+
+COMPOSE_EOF
+
+# ── CloudWatch Log Groups ──────────────────────────────────────────
+REGION="${aws_region}"
+for svc in web backend calendar crew; do
+  aws logs create-log-group --log-group-name "/aqua-os/$svc" --region "$REGION" 2>/dev/null || true
+  aws logs put-retention-policy --log-group-name "/aqua-os/$svc" --retention-in-days 14 --region "$REGION" 2>/dev/null || true
+done
+
+# ── ECR Login & Container Pull ─────────────────────────────────────
+aws ecr get-login-password --region "$REGION" \
+  | docker login --username AWS --password-stdin "${ecr_web_url%%/*}"
+
+cd /opt/aquaos
+docker compose pull || true
+docker compose up -d
+
+# ── Health check (wait up to 60s) ──────────────────────────────────
+echo "=== Waiting for services to be healthy ==="
+for i in $(seq 1 12); do
+  if curl -sf http://localhost/api/health > /dev/null 2>&1; then
+    echo "✅ Services healthy after $((i * 5))s"
+    break
+  fi
+  sleep 5
+done
+
+echo "=== Bootstrap complete — $(date) ==="
+echo "Backend health: $(curl -sf http://localhost:8080/api/health || echo 'not ready')"
+echo "Crew health:    $(curl -sf http://localhost:8001/health || echo 'not ready')"

@@ -1,0 +1,101 @@
+# =============================================================================
+# AquaOS — Production Docker Compose (ECR images)
+# =============================================================================
+# This file is deployed to /opt/aquaos/docker-compose.yml on the EC2 instance.
+# Images are pulled from ECR (pushed by CI/CD on each repo).
+#
+# To deploy manually on the EC2 instance:
+#   aws ecr get-login-password | docker login --username AWS --password-stdin <account>.dkr.ecr.eu-west-1.amazonaws.com
+#   docker compose pull
+#   docker compose up -d
+#
+# To restart a single service after CI/CD push:
+#   docker compose pull aqua-os-backend
+#   docker compose up -d --no-deps aqua-os-backend
+# =============================================================================
+
+services:
+
+  # ── API Gateway / Frontend (nginx + React SPA) ────────────────────
+  # Routes: /api/* → backend, /api/calendar/* → calendar, /api/auth/* → calendar
+  aqua-os-web:
+    image: ${ECR_REGISTRY:-<account_id>.dkr.ecr.eu-west-1.amazonaws.com}/aqua-os-prod-web:latest
+    ports:
+      - "80:80"
+    depends_on:
+      - aqua-os-backend
+      - aqua-os-calendar
+    restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: /aqua-os/web
+        awslogs-region: eu-west-1
+        awslogs-stream-prefix: web
+
+  # ── Go Backend (levels, exercises, health) ────────────────────────
+  aqua-os-backend:
+    image: ${ECR_REGISTRY:-<account_id>.dkr.ecr.eu-west-1.amazonaws.com}/aqua-os-prod-backend:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - JWT_KEY=${JWT_KEY:?JWT_KEY is required}
+      - JWT_ISSUER=AquaOsCalendar
+      - JWT_AUDIENCE=AquaOsCalendar
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+    volumes:
+      - /mnt/efs/backend:/app
+    restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: /aqua-os/backend
+        awslogs-region: eu-west-1
+        awslogs-stream-prefix: backend
+
+  # ── Calendar Service (C# .NET) ────────────────────────────────────
+  aqua-os-calendar:
+    image: ${ECR_REGISTRY:-<account_id>.dkr.ecr.eu-west-1.amazonaws.com}/aqua-os-prod-calendar:latest
+    ports:
+      - "8082:8082"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:8082
+      - AWS__Region=eu-west-1
+      - IcsFilesPath=/data/ics
+      - CREW_SERVICE_URL=http://aqua-os-crew:8001
+      - Jwt__Key=${JWT_KEY:?JWT_KEY is required}
+      - Jwt__Issuer=AquaOsCalendar
+      - Jwt__Audience=AquaOsCalendar
+      - Admin__Username=${ADMIN_USERNAME:-admin}
+      - Admin__Password=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+    volumes:
+      - /mnt/data/ics:/data/ics
+    restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: /aqua-os/calendar
+        awslogs-region: eu-west-1
+        awslogs-stream-prefix: calendar
+
+  # ── CrewAI Microservice (Python) ──────────────────────────────────
+  aqua-os-crew:
+    image: ${ECR_REGISTRY:-<account_id>.dkr.ecr.eu-west-1.amazonaws.com}/aqua-os-prod-crew:latest
+    ports:
+      - "8001:8001"
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - CALENDAR_SERVICE_URL=http://aqua-os-calendar:8082
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHANNEL_ID=${TELEGRAM_CHANNEL_ID:-}
+    restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: /aqua-os/crew
+        awslogs-region: eu-west-1
+        awslogs-stream-prefix: crew

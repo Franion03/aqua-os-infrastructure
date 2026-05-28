@@ -1,0 +1,36 @@
+# =============================================================================
+# AquaOS Terraform Variables — Example
+# =============================================================================
+# Copy this file to terraform.tfvars and fill in your values.
+# Never commit terraform.tfvars to git — it contains secrets.
+# =============================================================================
+
+# ── AWS Region (keep eu-west-1 for lowest cost) ────────────────────
+aws_region = "eu-west-1"
+
+# ── Project ────────────────────────────────────────────────────────
+project_name = "aqua-os"
+environment  = "prod"
+
+# ── EC2 ────────────────────────────────────────────────────────────
+ssh_key_name     = "aquaos-prod"       # EC2 key pair name (create in AWS Console first)
+instance_type    = "t4g.small"         # ARM Graviton — cheapest always-on option
+root_volume_size = 20                  # GB (20 is plenty for Docker + small SQLite DB)
+ssh_cidr         = "0.0.0.0/0"        # RESTRICT THIS to your IP: "83.45.123.67/32"
+
+# ── Auth ───────────────────────────────────────────────────────────
+jwt_key        = "CHANGE_ME_TO_A_LONG_RANDOM_SECRET_KEY_AT_LEAST_32_CHARS"
+admin_username = "admin"
+admin_password = "CHANGE_ME_TO_A_STRONG_PASSWORD"
+
+# ── LLM Providers (at least one required for CrewAI) ───────────────
+# Get keys at: https://openrouter.ai/keys  or  https://aistudio.google.com/
+openrouter_api_key = ""
+gemini_api_key     = ""
+
+# ── Notifications (optional) ───────────────────────────────────────
+# telegram_bot_token   = ""
+# telegram_channel_id  = ""
+
+# ── Domain (optional) ──────────────────────────────────────────────
+# domain_name = "aquaos.example.com"
