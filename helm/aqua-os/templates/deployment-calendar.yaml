@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aqua-os.fullname" . }}-calendar
+  labels:
+    {{- include "aqua-os.labels" . | nindent 4 }}
+    app.kubernetes.io/component: calendar
+spec:
+  replicas: {{ .Values.calendar.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "aqua-os.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: calendar
+  template:
+    metadata:
+      labels:
+        {{- include "aqua-os.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: calendar
+    spec:
+      containers:
+        - name: calendar
+          image: "{{ .Values.calendar.image.repository }}:{{ .Values.calendar.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.calendar.service.port }}
+          env:
+            {{- range $key, $value := .Values.calendar.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.calendar.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.calendar.service.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.calendar.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10

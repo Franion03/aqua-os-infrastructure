@@ -51,6 +51,24 @@ web:
       cpu: 200m
       memory: 128Mi
 
+calendar:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/franion03/aqua-os-calendar
+    tag: latest
+  service:
+    port: 8082
+  env:
+    ConnectionStrings__DefaultConnection: "Host=postgres;Database=aquaos_calendar;Username=aquaos;Password=changeme"
+    RabbitMQ__Host: rabbitmq
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
 ingress:
   enabled: true
   className: nginx
