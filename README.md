@@ -60,3 +60,17 @@ terraform destroy
 ## License
 
 GPL-3.0
+
+## Monitoring
+
+Prometheus + Grafana monitoring stack in `monitoring/`. To run:
+
+```bash
+cd monitoring
+docker compose -f docker-compose.monitoring.yml up -d
+```
+
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3001 (admin/admin)
+
+Scrapes backend (:8080/metrics) and crew (:8001/metrics) services.

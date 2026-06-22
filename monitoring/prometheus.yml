@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'backend'
+    static_configs:
+      - targets: ['aqua-os-backend:8080']
+    metrics_path: /metrics
+
+  - job_name: 'crew'
+    static_configs:
+      - targets: ['aqua-os-crew:8001']
+    metrics_path: /metrics
