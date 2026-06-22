@@ -1,0 +1,58 @@
+global:
+  imagePullPolicy: IfNotPresent
+
+backend:
+  replicaCount: 2
+  image:
+    repository: ghcr.io/franion03/aqua-os-backend
+    tag: latest
+  service:
+    port: 8080
+  env:
+    JWT_KEY: "change-me-in-production"
+    DB_DRIVER: sqlite
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+crew:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/franion03/aqua-os-crew
+    tag: latest
+  service:
+    port: 8001
+  env:
+    OPENROUTER_API_KEY: ""
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+
+web:
+  replicaCount: 2
+  image:
+    repository: ghcr.io/franion03/aqua-os-web
+    tag: latest
+  service:
+    port: 80
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+ingress:
+  enabled: true
+  className: nginx
+  host: aquaos.example.com
+  tls: false
