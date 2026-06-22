@@ -1,0 +1,125 @@
+# Local development stack with Ollama (local LLM, no API keys needed)
+#
+# Usage:
+#   docker compose -f docker-compose.local.yml up -d
+#   
+#   # Wait for Ollama to start, then pull a model:
+#   docker exec aquaos-ollama ollama pull llama3.2:3b
+#
+#   # Access:
+#   - Web UI:    http://localhost:3000
+#   - Backend:   http://localhost:8080/api/health
+#   - Crew AI:   http://localhost:8001/health
+#   - Ollama:    http://localhost:11434
+#
+# The crew service auto-detects Ollama via OPENAI_API_BASE pointing to the
+# Ollama OpenAI-compatible endpoint. No API keys required.
+
+services:
+  # ── Local LLM (Ollama) ─────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: aquaos-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── Backend (Go REST API) ──────────────────────────────────────
+  backend:
+    image: ghcr.io/franion03/aqua-os-backend:latest
+    container_name: aquaos-backend
+    ports:
+      - "8080:8080"
+    environment:
+      - JWT_KEY=local-dev-secret-key-32chars!!
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=admin
+    volumes:
+      - backend-data:/app
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Crew AI (Python agents with local LLM) ─────────────────────
+  crew:
+    image: ghcr.io/franion03/aqua-os-crew:latest
+    container_name: aquaos-crew
+    ports:
+      - "8001:8001"
+    environment:
+      # Point CrewAI to Ollama's OpenAI-compatible endpoint
+      - OPENAI_API_BASE=http://ollama:11434/v1
+      - OPENAI_API_KEY=ollama
+      - OPENROUTER_API_KEY=ollama-local
+      - JWT_KEY=local-dev-secret-key-32chars!!
+      # Override model to use local Ollama model
+      - CREW_MODEL=ollama/llama3.2:3b
+    depends_on:
+      ollama:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+  # ── Web Frontend (React + Nginx) ───────────────────────────────
+  web:
+    image: ghcr.io/franion03/aqua-os-web:latest
+    container_name: aquaos-web
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # ── Calendar Service (.NET) ────────────────────────────────────
+  # Uncomment when ghcr.io/franion03/aqua-os-calendar is available:
+  # calendar:
+  #   image: ghcr.io/franion03/aqua-os-calendar:latest
+  #   container_name: aquaos-calendar
+  #   ports:
+  #     - "8082:8080"
+  #   environment:
+  #     - ConnectionStrings__DefaultConnection=Host=postgres;Database=aquaos_calendar;Username=aquaos;Password=devpassword
+  #     - RabbitMQ__Host=rabbitmq
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     rabbitmq:
+  #       condition: service_started
+
+  # ── Supporting Services ────────────────────────────────────────
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: aquaos-postgres
+  #   environment:
+  #     - POSTGRES_DB=aquaos_calendar
+  #     - POSTGRES_USER=aquaos
+  #     - POSTGRES_PASSWORD=devpassword
+  #   volumes:
+  #     - postgres-data:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U aquaos"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 5
+
+  # rabbitmq:
+  #   image: rabbitmq:3-management-alpine
+  #   container_name: aquaos-rabbitmq
+  #   ports:
+  #     - "15672:15672"
+  #   environment:
+  #     - RABBITMQ_DEFAULT_USER=aquaos
+  #     - RABBITMQ_DEFAULT_PASS=devpassword
+
+volumes:
+  ollama-models:
+  backend-data:
+  # postgres-data:
